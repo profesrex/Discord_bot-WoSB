@@ -1,104 +1,208 @@
-import logging
-
 import discord
 from discord import app_commands
-from discord.ui import Modal, TextInput, View, Button
+from discord.ui import Modal, TextInput, View, Button, Select
 from discord.ext import commands
+import logging
+import uuid
+import csv
+from pathlib import Path
+from datetime import datetime, timezone
 
 from ..config import config
 
 logger = logging.getLogger("portbattle_bot.cogs.portbattle")
 
+active_portbattles = {}
 
-class PortbattleModal(Modal, title="Neuer Portbattle"):
-    port_name = TextInput(label="Port Name", placeholder="San Martin", required=True, max_length=100)
-    battle_type = TextInput(label="Typ", placeholder="Angriff oder Verteidigung", required=True, max_length=50)
-    datetime = TextInput(label="Datum & Uhrzeit", placeholder="28.05.2026 19:30", required=True, max_length=100)
-    needed_players = TextInput(label="Benötigte Spieler", placeholder="20", required=True)
-    extra_message = TextInput(
-        label="Zusätzliche Nachricht / Hinweise",
-        style=discord.TextStyle.paragraph,
-        placeholder="z.B. Bringt Heavy Ships mit...",
-        required=False
-    )
+def load_ports():
+    ports = []
+    csv_path = Path("data/ports.csv")
+    try:
+        with open(csv_path, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                ports.append({
+                    "name": row["Port Name"].strip(),
+                    "players": row["Spieler"].strip()
+                })
+    except Exception as e:
+        logger.error(f"Fehler beim Laden der ports.csv: {e}")
+    return ports
+
+
+PORTS = load_ports()
+
+
+class PortbattleSelectView(View):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.selected_port = None
+        self.selected_type = None
+
+    @discord.ui.select(placeholder="Wähle einen Port...", min_values=1, max_values=1, options=[
+        discord.SelectOption(label=p["name"], description=f"{p['players']} Spieler") for p in PORTS
+    ])
+    async def port_select(self, interaction: discord.Interaction, select: Select):
+        self.selected_port = select.values[0]
+        await interaction.response.defer()
+
+    @discord.ui.select(placeholder="Angriff oder Verteidigung?", min_values=1, max_values=1, options=[
+        discord.SelectOption(label="⚔️ Angriff", value="Angriff"),
+        discord.SelectOption(label="🛡️ Verteidigung", value="Verteidigung"),
+    ])
+    async def type_select(self, interaction: discord.Interaction, select: Select):
+        self.selected_type = select.values[0]
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Weiter →", style=discord.ButtonStyle.green, row=2)
+    async def proceed(self, interaction: discord.Interaction, button: Button):
+        if not self.selected_port or not self.selected_type:
+            return await interaction.response.send_message("❌ Bitte Port und Typ wählen.", ephemeral=True)
+
+        modal = PortbattleModal(self.selected_port, self.selected_type)
+        await interaction.response.send_modal(modal)
+
+
+class PortbattleModal(Modal, title="Portbattle Details"):
+    datetime_input = TextInput(label="Datum & Uhrzeit", placeholder="28.05.2026 19:30", required=True)
+    extra_message = TextInput(label="Zusätzliche Hinweise", style=discord.TextStyle.paragraph, 
+                             placeholder="Heavy Ships, Rate...", required=False)
+
+    def __init__(self, port_name: str, battle_type: str):
+        super().__init__()
+        self.port_name = port_name
+        self.battle_type = battle_type
 
     async def on_submit(self, interaction: discord.Interaction):
-        logger.info("PortbattleModal submitted by %s in guild %s channel %s",
-                    interaction.user, interaction.guild and interaction.guild.id, interaction.channel and getattr(interaction.channel, 'id', None))
         await interaction.response.defer(ephemeral=True)
 
-        # Embed erstellen
+        event_id = f"{uuid.uuid4().hex[:8].upper()}"
+
         embed = discord.Embed(
-            title=f"⚔️ Portbattle: {self.port_name.value}",
-            color=0xFF4444 if "angriff" in self.battle_type.value.lower() else 0x44AAFF,
+            title=f"⚔️ {self.port_name.upper()} PB",
+            color=0xFF4444 if self.battle_type == "Angriff" else 0x00AAFF,
+            timestamp=datetime.now(timezone.utc)
         )
+
+        embed.set_thumbnail(url="https://i.imgur.com/nOH5mEk.png")
+
         embed.add_field(name="Organisator", value=interaction.user.mention, inline=False)
-        embed.add_field(name="Typ", value=self.battle_type.value, inline=True)
-        embed.add_field(name="Datum", value=self.datetime.value, inline=True)
-        embed.add_field(name="Benötigt", value=f"**{self.needed_players.value} Spieler**", inline=True)
+        embed.add_field(name="Typ", value=self.battle_type, inline=True)
+        embed.add_field(name="Zeit", value=self.datetime_input.value, inline=True)
 
         if self.extra_message.value:
-            embed.add_field(name="Zusätzliche Info", value=self.extra_message.value, inline=False)
+            embed.add_field(name="Hinweise", value=self.extra_message.value, inline=False)
 
-        embed.set_footer(text="Klicke auf die Buttons zum Eintragen")
+        # Initiale Listen (immer Index 3,4,5)
+        embed.add_field(name="✅ Teilnehmer (0)", value="Noch niemand", inline=True)
+        embed.add_field(name="❌ Kann nicht (0)", value="―", inline=True)
+        embed.add_field(name="❓ Noch unsicher (0)", value="―", inline=True)
 
-        # Nachricht im gleichen Kanal posten, in dem der Befehl ausgeführt wurde
-        channel = interaction.channel
-        if channel is None:
-            await interaction.followup.send(
-                "❌ Konnte den aktuellen Kanal nicht ermitteln.",
-                ephemeral=True,
-            )
-            return
+        embed.set_footer(text=f"Event ID: {event_id} • WoSB PB Manager")
 
-        view = PortbattleView()
-        try:
-            sent_message = await channel.send(embed=embed, view=view)
-            logger.info("Portbattle posted to channel %s, message id %s", channel.id, sent_message.id)
-        except Exception as exc:
-            logger.exception("Failed to send Portbattle announcement")
-            await interaction.followup.send(
-                "❌ Konnte die Ankündigung nicht senden.",
-                ephemeral=True,
-            )
-            return
+        view = PortbattleView(event_id=event_id)
+        message = await interaction.channel.send(embed=embed, view=view)
+
+        active_portbattles[message.id] = {
+            "event_id": event_id,
+            "port_name": self.port_name,
+            "battle_type": self.battle_type,
+            "datetime": self.datetime_input.value,
+            "attending": [],
+            "cant": [],
+            "maybe": [],
+        }
 
         await interaction.followup.send("✅ Portbattle erfolgreich angekündigt!", ephemeral=True)
 
 
 class PortbattleView(View):
-    def __init__(self):
-        super().__init__(timeout=None)  # Bleibt dauerhaft aktiv
+    def __init__(self, event_id: str):
+        super().__init__(timeout=None)
+        self.event_id = event_id
 
-    @discord.ui.button(label="✅ Attending", style=discord.ButtonStyle.green, custom_id="pb:attending")
-    async def attending(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message("✅ Du bist dabei!", ephemeral=True)
+    async def update_embed(self, interaction: discord.Interaction):
+        message = interaction.message
+        data = active_portbattles.get(message.id)
+        if not data:
+            return await interaction.response.send_message("Event nicht gefunden.", ephemeral=True)
 
-    @discord.ui.button(label="❌ Can't Make It", style=discord.ButtonStyle.red, custom_id="pb:cant")
-    async def cant(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message("❌ Eingetragen (Can't Make It)", ephemeral=True)
+        # Komplett neues Embed bauen
+        embed = discord.Embed(
+            title=message.embeds[0].title,
+            color=message.embeds[0].color,
+            timestamp=message.embeds[0].timestamp
+        )
 
-    @discord.ui.button(label="❓ Maybe", style=discord.ButtonStyle.gray, custom_id="pb:maybe")
-    async def maybe(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message("❓ Als Maybe eingetragen", ephemeral=True)
+        # Thumbnail und Footer übernehmen
+        if message.embeds[0].thumbnail:
+            embed.set_thumbnail(url=message.embeds[0].thumbnail.url)
+        embed.set_footer(text=message.embeds[0].footer.text)
 
+        # Statische Felder neu hinzufügen
+        fields = message.embeds[0].fields
+        for field in fields[:3]:          # Organisator, Typ, Zeit
+            embed.add_field(name=field.name, value=field.value, inline=field.inline)
+        
+        if len(fields) > 3 and "Hinweise" in fields[3].name:   # Hinweise falls vorhanden
+            embed.add_field(name=fields[3].name, value=fields[3].value, inline=fields[3].inline)
+            hint_offset = 1
+        else:
+            hint_offset = 0
 
+        # Dynamische Listen (immer an den richtigen Stellen)
+        att_text = "\n".join(u.mention for u in data["attending"]) or "Noch niemand"
+        cant_text = "\n".join(u.mention for u in data["cant"]) or "―"
+        maybe_text = "\n".join(u.mention for u in data["maybe"]) or "―"
+
+        embed.add_field(name=f"✅ Teilnehmer ({len(data['attending'])})", value=att_text, inline=True)
+        embed.add_field(name=f"❌ Kann nicht ({len(data['cant'])})", value=cant_text, inline=True)
+        embed.add_field(name=f"❓ Noch unsicher ({len(data['maybe'])})", value=maybe_text, inline=True)
+
+        await message.edit(embed=embed)
+
+    # Buttons bleiben gleich
+    @discord.ui.button(label="✅ Teilnehmer", style=discord.ButtonStyle.green)
+    async def teilnehmer(self, interaction: discord.Interaction, button: Button):
+        await self._handle(interaction, "attending", "✅ Als **Teilnehmer** eingetragen!")
+
+    @discord.ui.button(label="❌ Kann nicht", style=discord.ButtonStyle.red)
+    async def kann_nicht(self, interaction: discord.Interaction, button: Button):
+        await self._handle(interaction, "cant", "❌ Als **Kann nicht** eingetragen.")
+
+    @discord.ui.button(label="❓ Noch unsicher", style=discord.ButtonStyle.gray)
+    async def unsicher(self, interaction: discord.Interaction, button: Button):
+        await self._handle(interaction, "maybe", "❓ Als **Noch unsicher** eingetragen.")
+
+    async def _handle(self, interaction: discord.Interaction, category: str, msg: str):
+        data = active_portbattles.get(interaction.message.id)
+        if not data:
+            return await interaction.response.send_message("Event nicht gefunden.", ephemeral=True)
+
+        user = interaction.user
+
+        for key in ["attending", "cant", "maybe"]:
+            if key != category:
+                data[key] = [u for u in data[key] if u.id != user.id]
+
+        if user in data[category]:
+            data[category].remove(user)
+        else:
+            data[category].append(user)
+
+        await self.update_embed(interaction)
+        await interaction.response.send_message(msg, ephemeral=True)
 class PortbattleCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
 
     @app_commands.command(name="portbattle", description="Plane einen neuen Portbattle")
-    @app_commands.default_permissions(administrator=True)
     async def portbattle(self, interaction: discord.Interaction):
-        logger.info("Portbattle command invoked by %s in guild %s channel %s",
-                    interaction.user, interaction.guild and interaction.guild.id, interaction.channel and getattr(interaction.channel, 'id', None))
-        # Rolle prüfen
-        if config.ADMIRAL_ROLE_ID != 0:
-            if not any(role.id == config.ADMIRAL_ROLE_ID for role in interaction.user.roles):
-                await interaction.response.send_message("❌ Nur Admiräle dürfen Portbattles planen!", ephemeral=True)
-                return
+        if config.ADMIRAL_ROLE_ID and not any(role.id == config.ADMIRAL_ROLE_ID for role in interaction.user.roles):
+            return await interaction.response.send_message("❌ Nur Admiräle dürfen Portbattles planen!", ephemeral=True)
 
-        await interaction.response.send_modal(PortbattleModal())
+        view = PortbattleSelectView()
+        await interaction.response.send_message("Wähle Port und Typ:", view=view, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
