@@ -6,7 +6,8 @@ import logging
 import uuid
 import csv
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import re
 
 from ..config import config
 
@@ -64,17 +65,76 @@ class PortbattleSelectView(View):
 
 
 class PortbattleModal(Modal, title="Portbattle Details"):
-    datetime_input = TextInput(label="Datum & Uhrzeit", placeholder="28.05.2026 19:30", required=True)
-    extra_message = TextInput(label="Zusätzliche Hinweise", style=discord.TextStyle.paragraph, 
-                             placeholder="Heavy Ships, Rate...", required=False)
+    protection_input = TextInput(
+        label="Restschutzzeit",
+        placeholder="Format: xd yh (z.b. 2d 5h)",
+        required=True,
+        max_length=50
+    )
+    attack_start = TextInput(
+        label="Beginn Angriffszeitraum (Uhrzeit)",
+        placeholder="Format: HH:MM (z.b. 15:00)",
+        required=True,
+        max_length=5
+    )
+    extra_message = TextInput(
+        label="Zusätzliche Hinweise",
+        style=discord.TextStyle.paragraph,
+        placeholder="Heavy Ships, Rate...",
+        required=False
+    )
 
     def __init__(self, port_name: str, battle_type: str):
         super().__init__()
         self.port_name = port_name
         self.battle_type = battle_type
 
+    def parse_protection_time(self, text: str) -> timedelta:
+        """Parst Restschutzzeit im falschen Format angegeben (z.B. "2 Tage 5 Stunden")."""
+        text = text.lower().replace('tage', 'd').replace('tag', 'd').replace('stunden', 'h').replace('stunde', 'h')
+        days = hours = minutes = 0
+
+        days_match = re.search(r'(\d+)\s*d', text)
+        hours_match = re.search(r'(\d+)\s*h', text)
+        minutes_match = re.search(r'(\d+)\s*m', text)
+
+        if days_match:
+            days = int(days_match.group(1))
+        if hours_match:
+            hours = int(hours_match.group(1))
+        if minutes_match:
+            minutes = int(minutes_match.group(1))
+
+        return timedelta(days=days, hours=hours, minutes=minutes)
+
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+
+        try:
+            protection_delta = self.parse_protection_time(self.protection_input.value)
+            now = datetime.now(timezone.utc)
+            protection_end = now + protection_delta
+
+            # Gewünschte Startzeit parsen
+            start_time_str = self.attack_start.value.strip()
+            start_hour, start_min = map(int, start_time_str.split(':'))
+
+            # Nächsten Angriffsstart berechnen
+            attack_start = protection_end.replace(hour=start_hour, minute=start_min, second=0, microsecond=0)
+
+            # Falls die Startzeit vor dem Ende der Schutzzeit liegt → nächsten Tag
+            if attack_start < protection_end:
+                attack_start += timedelta(days=1)
+
+            attack_end = attack_start + timedelta(hours=2)
+
+            # Format für Embed
+            time_display = f"{attack_start.strftime('%d.%m.%Y')}\n{attack_start.strftime('%H:%M')} Uhr - {attack_end.strftime('%H:%M')} Uhr"
+
+        except Exception as e:
+            logger.error(f"Zeit-Berechnung fehlgeschlagen: {e}")
+            await interaction.followup.send("❌ Zeitberechnung fehlgeschlagen. Bitte z.B. `2d 4h` und `15:00` eingeben.", ephemeral=True)
+            return
 
         event_id = f"{uuid.uuid4().hex[:8].upper()}"
 
@@ -88,12 +148,11 @@ class PortbattleModal(Modal, title="Portbattle Details"):
 
         embed.add_field(name="Organisator", value=interaction.user.mention, inline=False)
         embed.add_field(name="Typ", value=self.battle_type, inline=True)
-        embed.add_field(name="Zeit", value=self.datetime_input.value, inline=True)
+        embed.add_field(name="Angriffszeit", value=time_display, inline=False)
 
         if self.extra_message.value:
             embed.add_field(name="Hinweise", value=self.extra_message.value, inline=False)
 
-        # Initiale Listen (immer Index 3,4,5)
         embed.add_field(name="✅ Teilnehmer (0)", value="Noch niemand", inline=True)
         embed.add_field(name="❌ Kann nicht (0)", value="―", inline=True)
         embed.add_field(name="❓ Noch unsicher (0)", value="―", inline=True)
@@ -107,14 +166,13 @@ class PortbattleModal(Modal, title="Portbattle Details"):
             "event_id": event_id,
             "port_name": self.port_name,
             "battle_type": self.battle_type,
-            "datetime": self.datetime_input.value,
+            "datetime": time_display,
             "attending": [],
             "cant": [],
             "maybe": [],
         }
 
         await interaction.followup.send("✅ Portbattle erfolgreich angekündigt!", ephemeral=True)
-
 
 class PortbattleView(View):
     def __init__(self, event_id: str):
