@@ -1,0 +1,18 @@
+[project]
+name = "portbattle-bot"
+version = "0.1.0"
+description = "Discord Portbattle Announcement Bot"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "discord>=2.3.2",
+    "python-dotenv>=1.2.2",
+]
+[project.scripts]
+bot = "portbattle_bot.main:run"
+
+[tool.uv]
+dev-dependencies = []
+
+[tool.ruff]
+line-length = 120
