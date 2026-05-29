@@ -2,11 +2,6 @@
 
 Dieses Repository enthält den Discord-Bot "Portbattle" zur Ankündigung von Portbattles.
 
-## Was ich vorgenommen habe
-- Ein lauffähiges Python-Paket `portbattle_bot` wurde unter `src/portbattle_bot` angelegt.
-- Die ursprüngliche Ordnerstruktur `src/portbattle-bot` (mit Bindestrich) wurde nicht gelöscht, um nichts zu verlieren. Du kannst sie später entfernen oder umbenennen.
-- Abhängigkeiten `discord` und `python-dotenv` wurden in der Projekt-venv installiert.
-
 ## Voraussetzungen
 - Python 3.13 (oder die in `pyproject.toml` angegebene Version)
 - Eine virtuelle Umgebung (empfohlen: `.venv` im Projekt)
@@ -16,22 +11,20 @@ Dieses Repository enthält den Discord-Bot "Portbattle" zur Ankündigung von Por
 
 ```bash
 source .venv/bin/activate
+uv init
 ```
 
 2. Abhängigkeiten installieren (falls nötig):
 
 ```bash
-pip install -r requirements.txt  # optional, falls du eine requirements-Datei hast
-pip install discord python-dotenv
+uv sync
 ```
 
 3. `.env` Datei prüfen
-- Lege eine `.env` Datei im Projektroot an (es gibt bereits eine, prüfe, ob der Token korrekt ist):
+- Lege eine `.env` Datei im Projektroot an :
 
 ```
-DISCORD_TOKEN=dein_token_hier
-ANNOUNCEMENT_CHANNEL_ID=123456789012345678
-ADMIRAL_ROLE_ID=987654321098765432
+DISCORD_TOKEN=dein_token_hier #von discord_developer website
 ```
 
 ## Bot lokal starten
@@ -40,7 +33,7 @@ Da das Paket unter `src/` liegt, setze beim Start `PYTHONPATH=src` oder installi
 Startbefehl (empfohlen für Entwicklung):
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m portbattle_bot.main
+bash run.sh
 ```
 
 Alternativ kannst du das Paket installierbar machen und dann `python -m portbattle_bot.main` verwenden.
