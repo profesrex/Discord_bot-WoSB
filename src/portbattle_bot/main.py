@@ -42,6 +42,9 @@ class Bot(commands.Bot):
         await self.load_extension("portbattle_bot.cogs.flotte")
         logger.info("Loaded cog: flotte")
 
+        await self.load_extension("portbattle_bot.cogs.portbattle_extra")
+        logger.info("Loaded cog: portbattle_extra")
+
 
 bot = Bot()
 

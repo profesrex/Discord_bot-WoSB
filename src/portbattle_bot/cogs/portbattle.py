@@ -157,7 +157,7 @@ class PortbattleModal(Modal, title="Portbattle Details"):
         embed.add_field(name="❌ Kann nicht (0)", value="―", inline=True)
         embed.add_field(name="❓ Noch unsicher (0)", value="―", inline=True)
 
-        embed.set_footer(text=f"Event ID: {event_id} • WoSB PB Manager")
+        embed.set_footer(text=f"Event ID: {event_id} • WoSB PB Manager by ProfesrEX")
 
         view = PortbattleView(event_id=event_id)
         message = await interaction.channel.send(embed=embed, view=view)
